@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory Match — offline</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: ui-monospace, monospace;
+    background: #101418; color: #d7dde3;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 20px; margin: 0; gap: 14px;
+  }
+  h1 { font-size: 18px; margin: 0; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  select, button, label {
+    font: inherit; background: #1b2129; color: #d7dde3;
+    border: 1px solid #2c343c; padding: 5px 10px;
+  }
+  #board {
+    display: grid; gap: 8px;
+  }
+  .card {
+    width: 62px; height: 62px; font-size: 34px;
+    background: #1b2129; color: #d7dde3;
+    border: 1px solid #2c343c; cursor: pointer; padding: 0;
+  }
+  .card.flipped { background: #232b33; }
+  .card.matched { background: #17301d; border-color: #2e7d32; opacity: 0.7; }
+  #status { min-height: 20px; }
+</style>
+</head>
+<body>
+  <h1>memory match <small>(offline)</small></h1>
+  <div class="controls">
+    <select id="difficulty"></select>
+    <select id="theme"></select>
+    <label><input type="checkbox" id="two-player"> 2 players</label>
+    <button id="new-game">new game</button>
+  </div>
+  <div id="status"></div>
+  <div id="board"></div>
+<script type="module">
+// core.ts
+/* Pure game logic for the memory-match game: deck building, flip/match
+ * state machine, scoring, two-player turns. No DOM here. */
+
+                                                             
+
+export const THEMES                          = {
+  fruits: ["🍎", "🍌", "🍇", "🍒", "🍍", "🥝", "🍑", "🍉", "🥑", "🍋", "🍓", "🫐"],
+  space: ["🚀", "🛸", "🌍", "🌙", "⭐", "☄️", "🪐", "☀️", "🔭", "👽", "🛰️", "🌟"],
+  animals: ["🐶", "🐱", "🦊", "🐻", "🐼", "🐨", "🦁", "🐮", "🐷", "🐸", "🐵", "🦉"],
+  cards: ["🂡", "🂱", "🃁", "🃑", "🂢", "🂲", "🃂", "🃒", "🂪", "🂺", "🂾", "🃞"],
+};
+
+                             
+               
+                
+ 
+
+export const DIFFICULTIES               = [
+  { name: "easy", pairs: 6 },
+  { name: "medium", pairs: 8 },
+  { name: "hard", pairs: 10 },
+];
+
+                       
+             
+                 
+                   
+                   
+ 
+
+                         
+               
+                
+ 
+
+                            
+                
+                                                                           
+                    
+                                     
+                                  
+                       
+                     
+                           
+                                                    
+ 
+
+/** Fisher-Yates with an injected rng so tests are deterministic. */
+export function shuffled   (items     , rng              )      {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = out[i]     ;
+    out[i] = out[j]     ;
+    out[j] = tmp;
+  }
+  return out;
+}
+
+export function makeRng(seed        )               {
+  let state = seed >>> 0 || 1;
+  return () => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    state >>>= 0;
+    return state / 4294967296;
+  };
+}
+
+                              
+                         
+               
+                                        
+                
+ 
+
+export function newGame(options             )            {
+  const { difficulty, theme, playerNames } = options;
+  const symbols = shuffled(THEMES[theme], makeRng((options.seed ?? 1) + 77)).slice(
+    0,
+    difficulty.pairs,
+  );
+  const deck = shuffled(
+    symbols.flatMap((symbol, kind) => [
+      { id: kind * 2, symbol, flipped: false, matched: false },
+      { id: kind * 2 + 1, symbol, flipped: false, matched: false },
+    ]),
+    makeRng((options.seed ?? 1) + 991),
+  );
+  const players           = playerNames.map((name) => ({ name, pairs: 0 }));
+  return {
+    cards: deck,
+    flipped: [],
+    players: players.length > 0 ? players : [{ name: "player 1", pairs: 0 }],
+    turn: 0,
+    moves: 0,
+    matchedPairs: 0,
+    totalPairs: difficulty.pairs,
+    phase: "playing",
+    winner: null,
+  };
+}
+
+                                                                        
+
+/** Flip the card at `position`. Two face-up unmatched cards resolve
+ * immediately: match -> removed + same player continues; mismatch ->
+ * flipped back and the turn passes. */
+export function flip(game           , position        )             {
+  if (game.phase !== "playing") return "ignored";
+  if (game.flipped.length >= 2) return "ignored";
+  const card = game.cards[position];
+  if (!card || card.matched || card.flipped) return "ignored";
+
+  card.flipped = true;
+  game.flipped.push(position);
+
+  if (game.flipped.length < 2) return "flipped";
+
+  // resolve the pair
+  game.moves += 1;
+  const first = game.cards[game.flipped[0]          ]        ;
+  const second = game.cards[game.flipped[1]          ]        ;
+  if (first.symbol === second.symbol) {
+    first.matched = true;
+    second.matched = true;
+    first.flipped = false;
+    second.flipped = false;
+    game.flipped = [];
+    game.players[game.turn] .pairs += 1;
+    game.matchedPairs += 1;
+    if (game.matchedPairs === game.totalPairs) {
+      game.phase = "won";
+      finish(game);
+    }
+    return "matched";
+  }
+  // mismatch: turn passes, cards flip back
+  first.flipped = false;
+  second.flipped = false;
+  game.flipped = [];
+  game.turn = (game.turn + 1) % game.players.length;
+  return "mismatch";
+}
+
+function finish(game           )       {
+  const scores = game.players.map((p) => p.pairs);
+  const best = Math.max(...scores);
+  const winners = scores.filter((s) => s === best).length;
+  game.winner = winners > 1 ? -1 : scores.indexOf(best);
+}
+
+/** Flatten the board to a single-line string for headless verification. */
+export function boardLine(game           )         {
+  return game.cards
+    .map((card) => {
+      if (card.matched) return "◆";
+      if (card.flipped) return card.symbol;
+      return "?";
+    })
+    .join("");
+}
+
+/* DOM layer: card grid, flip animations, theme/difficulty selectors,
+ * two-player scoreboard. */
+
+// core.ts (inlined below)
+
+const THEME_KEYS = Object.keys(THEMES)           ;
+
+let game           ;
+let lockMs = 700;
+let lockTimer                                       = null;
+
+function setup()       {
+  const diffSelect = document.getElementById("difficulty")                     ;
+  for (const diff of DIFFICULTIES) {
+    const option = document.createElement("option");
+    option.value = diff.name;
+    option.textContent = `${diff.name} (${diff.pairs} pairs)`;
+    diffSelect.appendChild(option);
+  }
+  diffSelect.value = "medium";
+
+  const themeSelect = document.getElementById("theme")                     ;
+  for (const key of THEME_KEYS) {
+    const option = document.createElement("option");
+    option.value = key;
+    option.textContent = key;
+    themeSelect.appendChild(option);
+  }
+  themeSelect.value = "fruits";
+
+  const twoPlayer = document.getElementById("two-player")                    ;
+  newRound(diffSelect, themeSelect, twoPlayer);
+
+  const restart = () => newRound(diffSelect, themeSelect, twoPlayer);
+  diffSelect.addEventListener("change", restart);
+  themeSelect.addEventListener("change", restart);
+  twoPlayer.addEventListener("change", restart);
+  document.getElementById("new-game")?.addEventListener("click", restart);
+}
+
+function newRound(
+  diffSelect                   ,
+  themeSelect                   ,
+  twoPlayer                  ,
+)       {
+  const difficulty = DIFFICULTIES.find((d) => d.name === diffSelect.value)              ;
+  const names = twoPlayer.checked ? ["player 1", "player 2"] : ["solo"];
+  game = newGame({
+    difficulty,
+    theme: themeSelect.value         ,
+    playerNames: names,
+    seed: Math.floor(Math.random() * 2 ** 31),
+  });
+  const boardEl = document.getElementById("board")               ;
+  boardEl.style.gridTemplateColumns = `repeat(${Math.ceil(game.cards.length / 4 / 2)}, 1fr)`;
+  boardEl.innerHTML = "";
+  game.cards.forEach((card, position) => {
+    const cellEl = document.createElement("button");
+    cellEl.className = "card";
+    cellEl.dataset.pos = String(position);
+    cellEl.textContent = "?";
+    cellEl.addEventListener("click", () => onCard(position));
+    boardEl.appendChild(cellEl);
+  });
+  paint();
+}
+
+function onCard(position        )       {
+  if (lockTimer !== null) return; // mismatch pause
+  const result = flip(game, position);
+  paint();
+  if (result === "mismatch") {
+    lockTimer = setTimeout(() => {
+      lockTimer = null;
+      paint();
+    }, lockMs);
+  }
+}
+
+function paint()       {
+  const cells = document.querySelectorAll                   ("#board .card");
+  cells.forEach((cellEl) => {
+    const position = Number(cellEl.dataset.pos);
+    const card = game.cards[position];
+    if (!card) return;
+    if (card.matched) {
+      cellEl.textContent = card.symbol;
+      cellEl.classList.add("matched");
+      cellEl.classList.remove("flipped");
+    } else if (card.flipped) {
+      cellEl.textContent = card.symbol;
+      cellEl.classList.add("flipped");
+    } else {
+      cellEl.textContent = "?";
+      cellEl.classList.remove("flipped", "matched");
+    }
+  });
+  const status = document.getElementById("status")               ;
+  if (game.phase === "won") {
+    const winner =
+      game.winner === null
+        ? ""
+        : game.winner === -1
+          ? " — draw!"
+          : ` — ${game.players[game.winner]?.name} wins!`;
+    status.textContent = `solved in ${game.moves} moves${winner}`;
+  } else if (game.players.length === 2) {
+    status.textContent = game.players
+      .map((p, i) => `${i === game.turn ? "▶ " : ""}${p.name}: ${p.pairs}`)
+      .join("  ·  ");
+  } else {
+    status.textContent = `moves: ${game.moves} · pairs: ${game.matchedPairs}/${game.totalPairs}`;
+  }
+}
+
+setup();
+
+</script>
+</body>
+</html>

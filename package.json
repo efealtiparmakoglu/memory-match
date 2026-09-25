@@ -1,0 +1,12 @@
+{
+  "name": "memory-match",
+  "version": "1.0.0",
+  "description": "Unicode memory-match game: difficulty levels, themes, hot-seat two-player mode — single-file offline HTML",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=22.18.0" },
+  "scripts": {
+    "test": "node --test tests/",
+    "build": "node build.ts"
+  }
+}
